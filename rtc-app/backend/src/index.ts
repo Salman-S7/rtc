@@ -1,65 +1,64 @@
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
+import { ExtendedWebsocketType, IncomingMessage, RoomMap } from "./types";
+import { createRoom } from "./handlers/createRoom";
+import { validateMessage } from "./utils/validateMessages";
+import { joinRoom } from "./handlers/joinRoom";
+import { handleChat } from "./handlers/handleChat";
 
 const wss = new WebSocketServer({ port: 8080 });
 
-const rooms = new Map<string, WebSocket[]>();
+const rooms: RoomMap = {};
 
-wss.on("connection", (socket) => {
-  socket.on("message", (message) => {
-    const data = JSON.parse(message.toString());
+wss.on("connection", (socket: ExtendedWebsocketType) => {
+  socket.on("message", (data) => {
+    let message: IncomingMessage;
 
-    switch (data.type) {
+    try {
+      message = JSON.parse(data.toString());
+    } catch (error) {
+      return socket.send(
+        JSON.stringify({ type: "error", message: "Invalid message" })
+      );
+    }
+
+    if (!validateMessage(message)) {
+      return socket.send(
+        JSON.stringify({
+          type: "error",
+          message: "Invalid message strucutre",
+        })
+      );
+    }
+
+    switch (message.type) {
       case "create-room":
-        const roomId = createRandomRoomId();
-        rooms.set(roomId, [socket]);
-        socket.send(
-          JSON.stringify({
-            message: "room created succesfully",
-            roomId: roomId,
-          })
-        );
+        createRoom(socket, rooms);
         break;
       case "join-room":
-        const { roomToJoin } = data;
+        const { roomToJoin } = message;
 
-        if (rooms.has(roomToJoin)) {
-          if (rooms.get(roomToJoin)?.length === 2) {
-            socket.send(
-              JSON.stringify({
-                message: "That room is already filled try another one.",
-              })
-            );
-          } else {
-            // @ts-ignore
-            rooms.get(roomToJoin)[1] = socket;
-          }
-        } else {
-          socket.send(JSON.stringify({ message: "Given room does't exists" }));
-        }
+        joinRoom(socket, rooms, roomToJoin);
+
         break;
       case "chat":
-        const { roomToChat } = data;
-
-        if (rooms.has(roomToChat)) {
-          rooms.get(roomToChat)?.forEach((s) => {
-            s.send(JSON.stringify({ messageRecieved: data.message }));
-          });
-        } else {
-          socket.send(JSON.stringify({ message: "Given room does't exists" }));
-        }
+        handleChat(socket, rooms, message.roomToChat, message.message);
         break;
     }
   });
 
-  socket.on("close", (socket) => {
+  socket.on("close", () => {
     console.log("Connection closed");
+    const roomId = socket.roomId;
+
+    if (roomId && rooms[roomId]) {
+      rooms.roomId.delete(socket);
+      if (rooms[roomId].size === 0) {
+        delete rooms[roomId];
+      }
+    }
   });
 
   socket.on("error", (error) => {
     console.log("Something went wrong", error);
   });
 });
-
-function createRandomRoomId() {
-  return Math.random().toString(36).substring(2, 5);
-}
